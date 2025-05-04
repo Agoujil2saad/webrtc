@@ -35,6 +35,7 @@
 #include "modules/rtp_rtcp/source/rtp_format_h264.h"
 #include "rtc_base/byte_buffer.h"
 #include "rtc_base/logging.h"
+#include "rtc_base/third_party/base64/base64.h"
 
 enum class EncryptOrDecrypt { kEncrypt = 0, kDecrypt };
 
@@ -365,6 +366,15 @@ void FrameCryptorTransformer::encryptFrame(
                          ? key_provider_->GetSharedKey(participant_id_)
                          : key_provider_->GetKey(participant_id_);
 
+  RTC_LOG(LS_INFO) << "FrameCryptorTransformer::encryptFrame() key_handler "
+                   << key_handler->GetKeySet(key_index_)->material.size();
+
+  // show key as base64
+  std::string key_base64;
+  rtc::Base64::EncodeFromArray(key_handler->GetKeySet(key_index_)->material.data(), key_handler->GetKeySet(key_index_)->material.size(), &key_base64);
+  RTC_LOG(LS_INFO) << "FrameCryptorTransformer::encryptFrame() key_base64 "
+                   << key_base64;
+
   if (key_handler == nullptr || key_handler->GetKeySet(key_index_) == nullptr) {
     RTC_LOG(LS_INFO) << "FrameCryptorTransformer::encryptFrame() no keys, or "
                         "key_index["
@@ -397,7 +407,7 @@ void FrameCryptorTransformer::encryptFrame(
 
   std::vector<uint8_t> buffer;
   if (AesEncryptDecrypt(EncryptOrDecrypt::kEncrypt, algorithm_,
-                        key_set->encryption_key, iv, frame_header, payload,
+                        key_set->material, iv, frame_header, payload,
                         &buffer) == Success) {
     rtc::Buffer encrypted_payload(buffer.data(), buffer.size());
     rtc::Buffer tag(encrypted_payload.data() + encrypted_payload.size() - 16,
@@ -432,6 +442,7 @@ void FrameCryptorTransformer::encryptFrame(
       last_enc_error_ = FrameCryptionState::kEncryptionFailed;
       onFrameCryptionStateChanged(last_enc_error_);
     }
+    sink_callback->OnTransformedFrame(std::move(frame));
     RTC_LOG(LS_ERROR) << "FrameCryptorTransformer::encryptFrame() failed";
   }
 }
@@ -571,61 +582,14 @@ void FrameCryptorTransformer::decryptFrame(
   rtc::Buffer tag(encrypted_payload.data() + encrypted_payload.size() - 16, 16);
   std::vector<uint8_t> buffer;
 
-  int ratchet_count = 0;
-  auto initialKeyMaterial = key_set->material;
   bool decryption_success = false;
   if (AesEncryptDecrypt(EncryptOrDecrypt::kDecrypt, algorithm_,
-                        key_set->encryption_key, iv, frame_header,
+                        key_set->material, iv, frame_header,
                         encrypted_payload, &buffer) == Success) {
     decryption_success = true;
-  } else {
-    RTC_LOG(LS_WARNING) << "FrameCryptorTransformer::decryptFrame() failed";
-    rtc::scoped_refptr<ParticipantKeyHandler::KeySet> ratcheted_key_set;
-    auto currentKeyMaterial = key_set->material;
-    if (key_provider_->options().ratchet_window_size > 0) {
-      while (ratchet_count < key_provider_->options().ratchet_window_size) {
-        ratchet_count++;
+  } 
 
-        RTC_LOG(LS_INFO) << "ratcheting key attempt " << ratchet_count << " of "
-                         << key_provider_->options().ratchet_window_size;
-
-        auto new_material = key_handler->RatchetKeyMaterial(currentKeyMaterial);
-        ratcheted_key_set = key_handler->DeriveKeys(
-            new_material, key_provider_->options().ratchet_salt, 128);
-
-        if (AesEncryptDecrypt(EncryptOrDecrypt::kDecrypt, algorithm_,
-                              ratcheted_key_set->encryption_key, iv,
-                              frame_header, encrypted_payload,
-                              &buffer) == Success) {
-          RTC_LOG(LS_INFO) << "FrameCryptorTransformer::decryptFrame() "
-                              "ratcheted to key_index="
-                           << static_cast<int>(key_index);
-          decryption_success = true;
-          // success, so we set the new key
-          key_handler->SetKeyFromMaterial(new_material, key_index);
-          key_handler->SetHasValidKey();
-          if (last_dec_error_ != FrameCryptionState::kKeyRatcheted) {
-            last_dec_error_ = FrameCryptionState::kKeyRatcheted;
-            onFrameCryptionStateChanged(last_dec_error_);
-          }
-          break;
-        }
-        // for the next ratchet attempt
-        currentKeyMaterial = new_material;
-      }
-
-      /* Since the key it is first send and only afterwards actually used for
-        encrypting, there were situations when the decrypting failed due to the
-        fact that the received frame was not encrypted yet and ratcheting, of
-        course, did not solve the problem. So if we fail RATCHET_WINDOW_SIZE
-        times, we come back to the initial key.
-       */
-      if (!decryption_success ||
-          ratchet_count >= key_provider_->options().ratchet_window_size) {
-        key_handler->SetKeyFromMaterial(initialKeyMaterial, key_index);
-      }
-    }
-  }
+  
 
   if (!decryption_success) {
     if (key_handler->DecryptionFailure()) {
