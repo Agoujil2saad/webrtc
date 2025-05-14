@@ -132,8 +132,10 @@ uint8_t get_unencrypted_bytes(webrtc::TransformableFrameInterface* frame,
       unencrypted_bytes = 1;
       break;
     case webrtc::FrameCryptorTransformer::MediaType::kVideoFrame: {
+      // log codec type
       auto videoFrame =
           static_cast<webrtc::TransformableVideoFrameInterface*>(frame);
+           RTC_LOG(LS_INFO) << "Video codec type: " << videoFrame->header().codec;
       if (videoFrame->header().codec ==
           webrtc::VideoCodecType::kVideoCodecAV1) {
         unencrypted_bytes = 0;
@@ -369,6 +371,10 @@ void FrameCryptorTransformer::encryptFrame(
   RTC_LOG(LS_INFO) << "FrameCryptorTransformer::encryptFrame() key_handler "
                    << key_handler->GetKeySet(key_index_)->material.size();
 
+  std::string participant_id_str = participant_id_;
+  RTC_LOG(LS_INFO) << "FrameCryptorTransformer::encryptFrame() participant_id_str "
+                   << participant_id_str;
+
   // show key as base64
   std::string key_base64;
   rtc::Base64::EncodeFromArray(key_handler->GetKeySet(key_index_)->material.data(), key_handler->GetKeySet(key_index_)->material.size(), &key_base64);
@@ -455,6 +461,8 @@ void FrameCryptorTransformer::decryptFrame(
     webrtc::MutexLock lock(&mutex_);
     enabled_cryption = enabled_cryption_;
     if (type_ == webrtc::FrameCryptorTransformer::MediaType::kAudioFrame) {
+      // info log saying audio frame of isize
+      RTC_LOG(LS_INFO) << "FrameCryptorTransformer::decryptFrame() audio frame of isize " << frame->GetData().size();
       sink_callback = sink_callback_;
     } else {
       sink_callback = sink_callbacks_[frame->GetSsrc()];
